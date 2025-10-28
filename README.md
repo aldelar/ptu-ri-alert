@@ -358,11 +358,6 @@ cd function-app
 func start
 ```
 
-```bash
-cd function-app
-func start
-```
-
 In another terminal, send a test Event Grid event:
 
 ```bash
@@ -895,7 +890,3 @@ Save this as `test-ptu-alert.sh`, update the variables, and run:
 chmod +x test-ptu-alert.sh
 ./test-ptu-alert.sh
 ```
-
-## License
-
-MIT
