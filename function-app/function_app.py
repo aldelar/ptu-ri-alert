@@ -126,7 +126,6 @@ def check_ptu_capacity(subscription_id: str, resource_group: str, account_name: 
                         
         except Exception as e:
             logging.warning(f"⚠️  Could not query reservations: {str(e)}")
-            logging.warning("Note: Reservation data may be delayed up to 24 hours after purchase")
         
         logging.info(f"💰 Total reserved PTUs in subscription: {total_reserved_ptus}")
         if reservation_details:
