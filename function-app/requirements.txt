@@ -1,0 +1,6 @@
+azure-functions
+azure-identity
+azure-mgmt-cognitiveservices
+azure-mgmt-reservations
+
+

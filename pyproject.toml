@@ -1,0 +1,29 @@
+[project]
+name = "ptu-ri-alert"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "agent-framework-core",
+    "agent-framework-a2a",
+    "agent-framework-azure-ai",
+    "agent-framework-copilotstudio",
+    "agent-framework-mem0",
+    "agent-framework-redis",
+    "agent-framework-devui",
+    "azure-identity",
+    "azure-functions",
+    "azure-mgmt-cognitiveservices",
+    "azure-mgmt-reservations",
+    "azure-monitor-opentelemetry",
+    "azure-monitor-opentelemetry-exporter",
+    "azure-ai-evaluation",
+    "fastmcp",
+    "ipykernel",
+    "mcp[cli]",
+    "opentelemetry-instrumentation-requests",
+    "opentelemetry-instrumentation-urllib3",
+    "pydantic",
+    "python-dotenv",
+]
