@@ -6,6 +6,29 @@ Azure Function to monitor and alert on Azure AI Foundry PTU (Provisioned Through
 
 This solution automatically monitors Azure AI Foundry model deployments and compares total PTU capacity against Azure Reservations to detect over-allocation or under-utilization.
 
+### Example Output
+
+```
+================================================================================
+📊 PTU CAPACITY vs RESERVATIONS REPORT
+================================================================================
+Total PTU Deployments: 3
+Total PTU Capacity Allocated: 150
+Total PTU Reservations: 200
+Reservation Utilization: 75.0%
+
+✅ Under-utilized: 50 PTUs available
+
+Deployment Details:
+  - project-1/gpt-4-deployment: 100 PTUs (gpt-4)
+  - project-2/gpt-35-turbo: 30 PTUs (gpt-35-turbo)
+  - project-3/gpt-4-turbo: 20 PTUs (gpt-4-turbo)
+
+Reservation Details:
+  - OpenAI PTU Reservation: 200 units
+================================================================================
+```
+
 ## Architecture
 
 ```mermaid
@@ -533,29 +556,6 @@ Common issues:
 4. Check function logs for detailed error messages
 
 ## Architecture Details
-
-### Event Flow
-
-```
-================================================================================
-📊 PTU CAPACITY vs RESERVATIONS REPORT
-================================================================================
-Total PTU Deployments: 3
-Total PTU Capacity Allocated: 150
-Total PTU Reservations: 200
-Reservation Utilization: 75.0%
-
-✅ Under-utilized: 50 PTUs available
-
-Deployment Details:
-  - project-1/gpt-4-deployment: 100 PTUs (gpt-4)
-  - project-2/gpt-35-turbo: 30 PTUs (gpt-35-turbo)
-  - project-3/gpt-4-turbo: 20 PTUs (gpt-4-turbo)
-
-Reservation Details:
-  - OpenAI PTU Reservation: 200 units
-================================================================================
-```
 
 ## Project Structure
 
