@@ -59,7 +59,7 @@ graph TB
   - Permissions to create Event Grid topics and subscriptions
   - Reader access to ML workspaces and reservations
 
-## Setup Instructions
+## Setup and Testing Guide
 
 ### Step 1: Create the Azure Function App
 
@@ -91,6 +91,19 @@ az functionapp create \
   --os-type Linux
 ```
 
+#### Verify Function App Creation
+
+```bash
+# Check if function app exists and is running
+az functionapp show \
+  --name $FUNCTION_APP_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --query "{Name:name, State:state, Location:location}" \
+  --output table
+```
+
+You should see the function app with `State: Running`.
+
 ### Step 2: Configure Function App Settings
 
 Set the required app settings for Python V2 programming model:
@@ -105,13 +118,24 @@ az functionapp config appsettings set \
 
 **Note**: For Flex Consumption plans, do NOT set `FUNCTIONS_WORKER_RUNTIME` as it's managed automatically.
 
-### Step 3: Enable Managed Identity and Assign Permissions
+#### Verify Configuration
+
+```bash
+# Check app settings
+az functionapp config appsettings list \
+  --name $FUNCTION_APP_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --query "[?name=='AzureWebJobsFeatureFlags'].{Name:name, Value:value}" \
+  --output table
+```
+
+You should see `AzureWebJobsFeatureFlags` set to `EnableWorkerIndexing`.
+
+### Step 3: Enable Managed Identity, Assign Permissions, and Configure Event Grid
 
 **Critical**: The function requires a managed identity with proper permissions to access Azure resources.
 
-#### Option A: Use the automated setup script (Recommended)
-
-The `setup-event-grid.sh` script handles everything:
+Run the automated setup script that handles everything:
 
 ```bash
 cd event-grid
@@ -119,73 +143,44 @@ chmod +x setup-event-grid.sh
 ./setup-event-grid.sh
 ```
 
-This will:
+This script will:
 1. Enable system-assigned managed identity on the function
-2. Assign the Reader role at subscription level
+2. Assign the Reader role at subscription level (provides access to read CognitiveServices/AI Foundry deployments and Azure Reservations)
 3. Create the Event Grid system topic
 4. Create the event subscription with proper filters
 
-#### Option B: Manual setup
+**Note**: The script reads configuration from the `.env` file you created earlier.
 
-If you prefer to set up permissions manually:
+#### Verify Managed Identity and Permissions
 
 ```bash
-# Enable system-assigned managed identity
-az functionapp identity assign \
+# Verify managed identity is enabled
+az functionapp identity show \
   --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP
+  --resource-group $RESOURCE_GROUP \
+  --query "{PrincipalId:principalId, Type:type}" \
+  --output table
 
-# Get the managed identity Principal ID
+# Get the principal ID and check role assignments
 PRINCIPAL_ID=$(az functionapp identity show \
   --name $FUNCTION_APP_NAME \
   --resource-group $RESOURCE_GROUP \
-  --query principalId \
-  --output tsv)
+  --query principalId -o tsv)
 
-# Assign Reader role at subscription level
-# This provides access to:
-#   - Read CognitiveServices/AI Foundry deployments
-#   - Read Azure Reservations
-az role assignment create \
+echo "Principal ID: $PRINCIPAL_ID"
+echo ""
+echo "Role Assignments:"
+az role assignment list \
   --assignee $PRINCIPAL_ID \
-  --role "Reader" \
-  --scope "/subscriptions/$SUBSCRIPTION_ID"
-
-# Wait for permissions to propagate (15-30 seconds)
-sleep 15
-```
-
-**Why Reader role?**
-- Access to read CognitiveServices account deployments (AI Foundry models)
-- Access to query Azure Reservations API
-- Least-privilege principle - no write permissions needed
-
-### Step 4: Deploy the Function
-
-Install dependencies and deploy the function:
-
-```bash
-cd function-app
-
-# Deploy to Azure
-func azure functionapp publish $FUNCTION_APP_NAME
-```
-
-Verify the function was deployed successfully:
-
-```bash
-az functionapp function list \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query "[].{Name:name, TriggerType:config.bindings[0].type}" \
+  --query "[].{Role:roleDefinitionName, Scope:scope}" \
   --output table
 ```
 
-You should see:
+Expected output should show:
 ```
-Name                      TriggerType
-------------------------  ---------------
-ptu-ri-alert-function     eventGridTrigger
+Role      Scope
+--------  -----------------------------------------------------
+Reader    /subscriptions/12345678-1234-1234-1234-123456789abc
 ```
 
 ### Step 4: Deploy the Function
@@ -216,26 +211,145 @@ Name                      TriggerType
 ptu-ri-alert-function     eventGridTrigger
 ```
 
-### Step 5: Create Event Grid System Topic and Subscription
+### Step 5: Verify Event Grid Setup
 
-**Important**: Run Step 3 (identity setup) BEFORE this step. The function must have proper permissions for the monitoring to work.
+The Event Grid system topic and subscription were created by the script in Step 3. Let's verify everything is configured correctly:
 
-If you used the automated script in Step 3, Event Grid is already configured. Otherwise, update and run:
-
-```bash
-cd event-grid
-chmod +x setup-event-grid.sh
-# Edit the script to update configuration variables
-./setup-event-grid.sh
-```
-
-Verify the Event Grid subscription was created:
+#### Verify Event Grid Setup
 
 ```bash
+# Verify system topic was created
+az eventgrid system-topic show \
+  --name AIFoundryDeploymentTopic \
+  --resource-group $RESOURCE_GROUP \
+  --query "{Name:name, ProvisioningState:provisioningState, TopicType:topicType}" \
+  --output table
+
+# Verify event subscription was created
 az eventgrid system-topic event-subscription show \
   --name NewAIFoundryDeploymentSubscription \
   --resource-group $RESOURCE_GROUP \
-  --system-topic-name AIFoundryDeploymentTopic
+  --system-topic-name AIFoundryDeploymentTopic \
+  --query "{Name:name, ProvisioningState:provisioningState, Endpoint:destination.endpointType}" \
+  --output table
+```
+
+### Step 6: Test with a Deployment
+
+Create a test deployment to verify the monitoring function works:
+
+```bash
+# For PTU-based deployment (will show in capacity report):
+az cognitiveservices account deployment create \
+  --resource-group $RESOURCE_GROUP \
+  --name your-ai-foundry-resource \
+  --deployment-name test-ptu-gpt4 \
+  --model-name gpt-4 \
+  --model-version "0125-Preview" \
+  --model-format OpenAI \
+  --sku-capacity 100 \
+  --sku-name "ProvisionedManaged"
+```
+
+**Note:** Only deployments with SKU names starting with **"Provisioned"** (e.g., `ProvisionedManaged`) use PTUs. Other SKUs like `Standard`, `GlobalStandard` are pay-as-you-go (PAYG) and use tokens-per-minute (TPM).
+
+#### Verify Event Grid Captured the Event
+
+Wait ~30-60 seconds after deployment, then check Event Grid metrics:
+
+```bash
+# Check if event was matched
+az monitor metrics list \
+  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.EventGrid/systemTopics/AIFoundryDeploymentTopic" \
+  --metric "MatchedEventCount" \
+  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --interval PT1M \
+  --output table | grep -v "0.0"
+```
+
+**Expected output:**
+```
+Timestamp             Name            Total
+--------------------  --------------  -------
+2025-10-28T00:31:00Z  Matched Events  1.0
+```
+
+#### Verify Event Was Delivered to Function
+
+```bash
+# Check delivery status
+az monitor metrics list \
+  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.EventGrid/systemTopics/AIFoundryDeploymentTopic" \
+  --metric "DeliverySuccessCount" \
+  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --interval PT1M \
+  --output table | grep -v "0.0"
+```
+
+**Expected output:**
+```
+Timestamp             Name                        Total
+--------------------  --------------------------  -------
+2025-10-28T00:31:00Z  Delivery Succeeded Events   1.0
+```
+
+#### Verify Function Executed
+
+```bash
+# Check function execution count
+az monitor metrics list \
+  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNCTION_APP_NAME" \
+  --metric "OnDemandFunctionExecutionCount" \
+  --start-time $(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --interval PT1M \
+  --output table | grep -v "0.0"
+```
+
+**Expected output:**
+```
+Timestamp             Name                                Total
+--------------------  ----------------------------------  -------
+2025-10-28T00:31:00Z  On Demand Function Execution Count  1.0
+```
+
+#### View Function Logs and PTU Report
+
+Go to Azure Portal to see the detailed PTU capacity report:
+
+1. Navigate to: **Function App** → **ptu-ri-alert** → **Functions** → **ptu-ri-alert-function** → **Monitor**
+2. Click on the most recent invocation (timestamp should match your deployment time)
+3. View the logs
+
+**Expected log output:**
+```
+================================================================================
+🚨 NEW AI FOUNDRY DEPLOYMENT EVENT
+================================================================================
+Deployment: test-ptu-gpt4
+Account: your-ai-foundry-resource
+Resource Group: your-rg
+
+================================================================================
+📊 PTU CAPACITY CHECK
+================================================================================
+🔍 Scanning deployments in account: your-ai-foundry-resource
+
+Found deployment: test-ptu-gpt4
+  Model: gpt-4
+  SKU: ProvisionedManaged
+  Capacity: 100 PTUs
+
+📈 Total deployed PTUs in this account: 100
+
+🔍 Checking PTU reservations in subscription...
+💰 Total reserved PTUs in subscription: 0
+
+================================================================================
+📊 CAPACITY vs RESERVATIONS REPORT
+================================================================================
+⚠️  NO RESERVATIONS FOUND!
+   All 100 deployed PTUs will be billed hourly
+   Consider purchasing reservations for cost savings
 ```
 
 ## How It Works
@@ -255,9 +369,9 @@ az eventgrid system-topic event-subscription show \
    - Total reserved PTUs
    - Coverage status (fully covered / exceeds capacity / no reservations)
 
-## Viewing Function Logs
+## Monitoring and Logs
 
-### Azure Portal (Recommended)
+### Viewing Logs in Azure Portal
 
 1. Navigate to your Function App in Azure Portal
 2. Go to **Functions** → **ptu-ri-alert-function** → **Monitor**
@@ -276,7 +390,7 @@ traces
 | project timestamp, message, severityLevel
 ```
 
-### CLI (Metrics)
+### CLI Metrics
 
 Check function execution metrics:
 
@@ -298,60 +412,9 @@ az monitor metrics list \
   --output table
 ```
 
-## Testing
-
-### Production Testing
-
-Create or update a deployment in your Azure AI Foundry project:
-
-```bash
-# Example: Create a deployment
-az cognitiveservices account deployment create \
-  --resource-group $RESOURCE_GROUP \
-  --name your-ai-foundry-resource \
-  --deployment-name test-gpt4 \
-  --model-name gpt-4 \
-  --model-version "0125-Preview" \
-  --model-format OpenAI \
-  --sku-capacity 100 \
-  --sku-name "ProvisionedManaged"
-```
-
-The function will automatically be triggered. Check the logs in Azure Portal (see "Viewing Function Logs" section above).
-
-### Expected Log Output
-
-When a deployment is created, you should see logs similar to:
-
-```
-================================================================================
-🚨 NEW AI FOUNDRY DEPLOYMENT EVENT
-================================================================================
-Deployment: test-gpt4
-Account: your-ai-foundry-resource
-Resource Group: your-rg
-Event Type: Microsoft.Resources.ResourceWriteSuccess
-
-================================================================================
-📊 PTU CAPACITY CHECK
-================================================================================
-🔍 Scanning deployments in account: your-ai-foundry-resource
-
-Found deployment: test-gpt4
-  Model: gpt-4
-  SKU: ProvisionedManaged
-  Capacity: 100 PTUs
-
-📊 Total Deployed PTUs: 100
-💰 Total Reserved PTUs: 200
-
-✅ Deployed capacity (100 PTUs) is within reserved capacity (200 PTUs)
-   Remaining reservation: 100 PTUs
-```
-
 ### Local Testing (Optional)
 
-Run the function locally:
+If you want to test the function locally before deploying:
 
 ```bash
 cd function-app
@@ -448,6 +511,27 @@ Common issues:
 - Invalid CognitiveServices account name in the event
 - Network connectivity issues
 
+### Function not appearing after deployment
+
+1. Verify the file is named `function_app.py` (not `__init__.py`)
+2. Check that `AzureWebJobsFeatureFlags=EnableWorkerIndexing` is set
+3. Restart the function app: `az functionapp restart --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP`
+4. Redeploy: `func azure functionapp publish $FUNCTION_APP_NAME`
+
+### Event Grid subscription creation fails
+
+1. Ensure the function is deployed and visible
+2. Verify the function name matches exactly: `ptu-ri-alert-function`
+3. Check that the AI project name is correct
+4. Run the setup script again after fixing configuration
+
+### Function receives events but can't check PTU capacity
+
+1. Verify managed identity is enabled on the function app
+2. Check that Reader role is assigned at subscription level
+3. Verify Reservation Reader role if checking reservations
+4. Check function logs for detailed error messages
+
 ## Architecture Details
 
 ### Event Flow
@@ -496,29 +580,6 @@ ptu-ri-alert/
 - **Flex Consumption**: If using Flex Consumption plan, do not manually set `FUNCTIONS_WORKER_RUNTIME`
 - **Worker Indexing**: `AzureWebJobsFeatureFlags=EnableWorkerIndexing` is required for Python V2 model
 - **Permissions**: The function's managed identity needs Reader access to workspaces and reservations
-
-## Troubleshooting
-
-### Function not appearing after deployment
-
-1. Verify the file is named `function_app.py` (not `__init__.py`)
-2. Check that `AzureWebJobsFeatureFlags=EnableWorkerIndexing` is set
-3. Restart the function app: `az functionapp restart --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP`
-4. Redeploy: `func azure functionapp publish $FUNCTION_APP_NAME`
-
-### Event Grid subscription creation fails
-
-1. Ensure the function is deployed and visible
-2. Verify the function name matches exactly: `ptu-ri-alert-function`
-3. Check that the AI project name is correct
-4. Run the setup script again after fixing configuration
-
-### Function receives events but can't check PTU capacity
-
-1. Verify managed identity is enabled on the function app
-2. Check that Reader role is assigned at subscription level
-3. Verify Reservation Reader role if checking reservations
-4. Check function logs for detailed error messages
 
 ## Permissions Reference
 
@@ -614,279 +675,6 @@ Expected output:
 ```
 Role                  Scope
 --------------------  -----------------------------------------------------
-Reader                /subscriptions/547b3a70-abb4-425f-9a55-c1a14d50e8a1
+Reader                /subscriptions/12345678-1234-1234-1234-123456789abc
 Reservations Reader   /providers/Microsoft.Capacity
-```
-
-## Testing and Verification Guide
-
-### Step 1: Create a Test Deployment
-
-Create a new deployment to trigger the monitoring function:
-
-```bash
-# For PTU-based deployment (will show in capacity report):
-az cognitiveservices account deployment create \
-  --resource-group $RESOURCE_GROUP \
-  --name your-ai-foundry-resource \
-  --deployment-name test-ptu-gpt4 \
-  --model-name gpt-4 \
-  --model-version "0125-Preview" \
-  --model-format OpenAI \
-  --sku-capacity 100 \
-  --sku-name "ProvisionedManaged"
-
-# For PAYG deployment (will show 0 PTUs):
-az cognitiveservices account deployment create \
-  --resource-group $RESOURCE_GROUP \
-  --name your-ai-foundry-resource \
-  --deployment-name test-payg-gpt4 \
-  --model-name gpt-4 \
-  --model-version "0125-Preview" \
-  --model-format OpenAI \
-  --sku-capacity 1000 \
-  --sku-name "GlobalStandard"
-```
-
-**Note:** Only deployments with SKU names starting with **"Provisioned"** (e.g., `ProvisionedManaged`) use PTUs. Other SKUs like `Standard`, `GlobalStandard` are pay-as-you-go (PAYG) and use tokens-per-minute (TPM).
-
-### Step 2: Verify Event Grid Captured the Event
-
-Wait ~30-60 seconds after deployment, then check Event Grid metrics:
-
-```bash
-# Check if event was matched
-az monitor metrics list \
-  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.EventGrid/systemTopics/AIFoundryDeploymentTopic" \
-  --metric "MatchedEventCount" \
-  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-  --interval PT1M \
-  --output table | grep -v "0.0"
-```
-
-**Expected output:**
-```
-Timestamp             Name            Total
---------------------  --------------  -------
-2025-10-28T00:31:00Z  Matched Events  1.0
-```
-
-If you see **no matched events**, check:
-- Deployment was in the correct resource group
-- Event subscription filters are correct
-- Deployment operation succeeded
-
-### Step 3: Verify Event Was Delivered Successfully
-
-Check if Event Grid successfully delivered the event to the function:
-
-```bash
-# Check delivery status
-az monitor metrics list \
-  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.EventGrid/systemTopics/AIFoundryDeploymentTopic" \
-  --metric "DeliverySuccessCount,DeliveryAttemptFailCount" \
-  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-  --interval PT1M \
-  --output table | grep -v "0.0"
-```
-
-**Expected output (success):**
-```
-Timestamp             Name                        Total
---------------------  --------------------------  -------
-2025-10-28T00:31:00Z  Delivery Succeeded Events   1.0
-```
-
-**If you see delivery failures:**
-```
-Timestamp             Name                    Total
---------------------  ----------------------  -------
-2025-10-28T00:31:00Z  Delivery Failed Events  3.0
-```
-
-This means Event Grid tried to deliver but failed. Common causes:
-- Function endpoint not accessible
-- Function authentication issues
-- Event Grid will automatically retry (up to 30 times over 24 hours)
-
-### Step 4: Verify Function Was Executed
-
-Check if the function actually ran:
-
-```bash
-# Check function execution count
-az monitor metrics list \
-  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNCTION_APP_NAME" \
-  --metric "OnDemandFunctionExecutionCount" \
-  --start-time $(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-  --interval PT1M \
-  --output table | grep -v "0.0"
-```
-
-**Expected output:**
-```
-Timestamp             Name                                Total
---------------------  ----------------------------------  -------
-2025-10-28T00:31:00Z  On Demand Function Execution Count  1.0
-```
-
-Multiple executions (e.g., 2-3) can appear if Event Grid retried delivery.
-
-### Step 5: Check Deployment SKU Type
-
-Verify if your deployment uses PTUs or PAYG:
-
-```bash
-# Check specific deployment
-az cognitiveservices account deployment show \
-  --resource-group $RESOURCE_GROUP \
-  --name your-ai-foundry-resource \
-  --deployment-name your-deployment-name \
-  --query "{Name:name, Model:properties.model.name, Sku:sku.name, Capacity:sku.capacity}" \
-  --output table
-
-# List all deployments
-az cognitiveservices account deployment list \
-  --resource-group $RESOURCE_GROUP \
-  --name your-ai-foundry-resource \
-  --query "[].{Name:name, Model:properties.model.name, Sku:sku.name, Capacity:sku.capacity}" \
-  --output table
-```
-
-**Output interpretation:**
-```
-Name        Model    Sku                 Capacity    Type
-----------  -------  ------------------  ----------  ----
-gpt-4-ptu   gpt-4    ProvisionedManaged  100         PTU ✅
-gpt-4-payg  gpt-4    GlobalStandard      5000        TPM (PAYG) ❌
-```
-
-- **ProvisionedManaged**, **Provisioned** = PTU-based (will be counted)
-- **GlobalStandard**, **Standard** = Pay-as-you-go (will show 0 PTUs)
-
-### Step 6: View Function Logs and PTU Report
-
-Go to Azure Portal to see the detailed PTU capacity report:
-
-1. Navigate to: **Function App** → **ptu-ri-alert** → **Functions** → **ptu-ri-alert-function** → **Monitor**
-2. Click on the most recent invocation (timestamp should match your deployment time)
-3. View the logs
-
-**Expected log output for PTU deployment:**
-```
-================================================================================
-🚨 NEW AI FOUNDRY DEPLOYMENT EVENT
-================================================================================
-Deployment: test-ptu-gpt4
-Account: your-ai-foundry-resource
-Resource Group: your-rg
-
-================================================================================
-📊 PTU CAPACITY CHECK
-================================================================================
-🔍 Scanning deployments in account: your-ai-foundry-resource
-
-Found deployment: test-ptu-gpt4
-  Model: gpt-4
-  SKU: ProvisionedManaged
-  Capacity: 100 PTUs
-
-📈 Total deployed PTUs in this account: 100
-
-🔍 Checking PTU reservations in subscription...
-💰 Total reserved PTUs in subscription: 0
-
-================================================================================
-📊 CAPACITY vs RESERVATIONS REPORT
-================================================================================
-⚠️  NO RESERVATIONS FOUND!
-   All 100 deployed PTUs will be billed hourly
-   Consider purchasing reservations for cost savings
-```
-
-**Expected log output for PAYG deployment:**
-```
-📈 Total deployed PTUs in this account: 0
-💰 Total reserved PTUs in subscription: 0
-
-⚠️  NO RESERVATIONS FOUND!
-   All 0 deployed PTUs will be billed hourly
-```
-
-### Complete End-to-End Test Script
-
-Here's a complete bash script to test everything:
-
-```bash
-#!/bin/bash
-
-# Configuration
-SUBSCRIPTION_ID="your-subscription-id"
-RESOURCE_GROUP="your-resource-group"
-FUNCTION_APP_NAME="ptu-ri-alert"
-AI_RESOURCE_NAME="your-ai-foundry-resource"
-
-echo "=========================================="
-echo "PTU RI Alert - End-to-End Test"
-echo "=========================================="
-echo ""
-
-echo "Step 1: Create test deployment..."
-DEPLOYMENT_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "Deployment time: $DEPLOYMENT_TIME"
-
-# Create a test deployment (you can comment this out if you don't want to create a new deployment)
-# az cognitiveservices account deployment create \
-#   --resource-group $RESOURCE_GROUP \
-#   --name $AI_RESOURCE_NAME \
-#   --deployment-name test-e2e-$(date +%s) \
-#   --model-name gpt-4 \
-#   --model-version "0125-Preview" \
-#   --model-format OpenAI \
-#   --sku-capacity 100 \
-#   --sku-name "ProvisionedManaged"
-
-echo ""
-echo "Waiting 60 seconds for event propagation..."
-sleep 60
-
-echo ""
-echo "Step 2: Check Event Grid metrics..."
-az monitor metrics list \
-  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.EventGrid/systemTopics/AIFoundryDeploymentTopic" \
-  --metric "MatchedEventCount" \
-  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-  --interval PT1M \
-  --output table | tail -10
-
-echo ""
-echo "Step 3: Check function execution..."
-az monitor metrics list \
-  --resource "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNCTION_APP_NAME" \
-  --metric "OnDemandFunctionExecutionCount" \
-  --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-  --interval PT1M \
-  --output table | tail -10
-
-echo ""
-echo "Step 4: Check all deployments..."
-az cognitiveservices account deployment list \
-  --resource-group $RESOURCE_GROUP \
-  --name $AI_RESOURCE_NAME \
-  --query "[].{Name:name, Model:properties.model.name, Sku:sku.name, Capacity:sku.capacity, PTU:sku.name}" \
-  --output table
-
-echo ""
-echo "=========================================="
-echo "✅ Test complete!"
-echo "=========================================="
-echo ""
-echo "Next: Check function logs in Azure Portal for detailed PTU report"
-echo "Portal URL: https://portal.azure.com/#@/resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNCTION_APP_NAME/functions"
-```
-
-Save this as `test-ptu-alert.sh`, update the variables, and run:
-```bash
-chmod +x test-ptu-alert.sh
-./test-ptu-alert.sh
 ```
