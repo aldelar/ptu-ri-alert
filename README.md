@@ -1,10 +1,8 @@
 # PTU RI Alert
 
-Azure Function to monitor and alert on Azure AI Foundry PTU (Provisioned Throughput Units) deployments and track capacity vs reservations.
+This solution accelerator automatically monitors Azure AI Foundry model deployments and compares total PTU (Provisioned Throughput Units) capacity against Azure RIs (Reservation Instances) to detect over-allocation or under-utilization of purchased Reservation Instances. This would prevent the allocation of PTUs billed on an hourly basis.
 
-## Overview
-
-This solution automatically monitors Azure AI Foundry model deployments and compares total PTU capacity against Azure Reservations to detect over-allocation or under-utilization.
+The solution monitors new deployements of LLM models leveraging Azure EventGrid and an Azure Function to recompute PTU allocations vs RIs and generate a utilization report from which different types of alerts could be derived to cover the needs of the operations.
 
 ### Example Output
 
